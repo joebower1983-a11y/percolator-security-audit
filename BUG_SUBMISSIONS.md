@@ -86,3 +86,70 @@ In `program/src/percolator.rs` around lines 3440-3480 in the KeeperCrank resolve
 **Expected Behavior:** Settlement should use the same coin-margined PnL formula as the risk engine (`oracle_close_position_core` or `mark_pnl_for_position`).
 
 **Actual Behavior:** Linear formula is used, producing incorrect settlement amounts that can over/under-pay users and potentially drain the vault.
+
+---
+
+## Bug #4: Hardcoded Program IDs
+
+**Severity:** High
+**Page:** Other (on-chain program)
+**Title:** Program IDs hardcoded as byte arrays instead of using canonical constants
+
+**Description:**
+SPL Token, System Program, and DEX program IDs (PumpSwap, Raydium, Meteora) are hardcoded as raw byte arrays in `program/src/percolator.rs` rather than using `spl_token::id()`, `system_program::id()`, or runtime validation against passed-in accounts.
+
+If Solana upgrades or forks any of these programs (which has happened — e.g., Token-2022 migration), the hardcoded IDs become stale. The program would silently interact with the wrong or non-existent program, potentially leading to fund loss or bricked markets that can't process withdrawals.
+
+**Steps to Reproduce:**
+1. Search codebase for hardcoded program ID byte arrays
+2. Compare against canonical program addresses
+3. Note absence of runtime `key == expected_program_id` checks on passed program accounts
+
+**Expected Behavior:** Use canonical constants (`spl_token::id()`) or validate passed-in program accounts against known IDs at runtime.
+
+**Actual Behavior:** Raw byte arrays that will silently break on any program upgrade/fork.
+
+---
+
+## Bug #5: Hardcoded Rent Exemption Values
+
+**Severity:** High
+**Page:** Other (on-chain program)
+**Title:** Rent exemption minimums are hardcoded instead of queried from Rent sysvar
+
+**Description:**
+Rent exemption minimums are hardcoded as constants rather than queried from the `Rent` sysvar at runtime via `Rent::get()?.minimum_balance(data_len)`. 
+
+Solana has adjusted rent parameters historically. If this happens again, accounts created with hardcoded (now-insufficient) lamports become eligible for rent collection. This could destroy user position accounts and market state data — effectively rugging users whose positions get reaped.
+
+**Steps to Reproduce:**
+1. Search for hardcoded lamport constants used in account creation
+2. Compare to what `Rent::get()?.minimum_balance()` would return
+3. Note the Rent sysvar is not passed as an account in creation instructions
+
+**Expected Behavior:** Query `Rent::get()?.minimum_balance(data_len)` at runtime for all account creation.
+
+**Actual Behavior:** Hardcoded values that may become insufficient if Solana adjusts rent parameters.
+
+---
+
+## Bug #6: O(N) RPC Calls Per Market — DoS Vector
+
+**Severity:** High
+**Page:** Markets
+**Title:** Client makes O(N) individual RPC calls per market participant — DoS and scalability risk
+
+**Description:**
+The frontend/client SDK fetches market data using one RPC call per account/position. For markets with many participants this creates a DoS vector: an attacker can create many small accounts to bloat RPC load, hitting rate limits and making the UI unusable for all users.
+
+This also creates a hard scalability ceiling — markets with 1000+ participants become impractical to load, degrading UX as the protocol grows.
+
+**Steps to Reproduce:**
+1. Open a market page with 50+ participants
+2. Monitor network tab — observe individual `getAccountInfo` calls for each position
+3. Create 100+ small dust accounts on a market
+4. Observe loading time and potential RPC rate limit errors
+
+**Expected Behavior:** Use `getMultipleAccounts` for batching, `getProgramAccounts` with filters for bulk fetching, or on-chain summary accounts to reduce reads.
+
+**Actual Behavior:** O(N) individual RPC calls that degrade linearly with participant count and are trivially exploitable for DoS.

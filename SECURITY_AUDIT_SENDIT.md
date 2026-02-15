@@ -176,6 +176,46 @@ Combined with C3 (vault not decremented), this can drain all user funds. While a
 
 ---
 
+### H6: Hardcoded Program IDs
+
+**File:** `program/src/percolator.rs`  
+**Severity:** High
+
+**Description:** Program IDs for SPL Token, System Program, and DEX programs (PumpSwap, Raydium, Meteora) are hardcoded as byte arrays rather than using Solana's `declare_id!` or runtime checks against `spl_token::id()`. If Solana upgrades or forks any of these programs, the hardcoded IDs become stale and the program silently interacts with the wrong (or non-existent) program — potentially leading to fund loss or bricked markets.
+
+**Proposed Fix:** Use canonical program ID constants from the respective crate (`spl_token::id()`, `system_program::id()`) or at minimum validate passed-in program accounts against known IDs at runtime.
+
+---
+
+### H7: Hardcoded Rent Exemption Values
+
+**File:** `program/src/percolator.rs`  
+**Severity:** High
+
+**Description:** Rent exemption minimums are hardcoded as constants rather than queried from the `Rent` sysvar at runtime. If Solana adjusts rent parameters (which has happened historically), accounts may be created with insufficient lamports, making them eligible for rent collection and eventual deletion — destroying user positions and market state.
+
+**Proposed Fix:** Use `Rent::get()?.minimum_balance(data_len)` at runtime instead of hardcoded values. Pass the Rent sysvar as an account where needed.
+
+---
+
+### H8: O(N) RPC Calls Per Market — DoS and Scalability Risk
+
+**File:** Frontend / client SDK  
+**Severity:** High
+
+**Description:** The client fetches market data with O(N) individual RPC calls per market (one per account/position). For markets with many participants, this creates:
+- **DoS vector:** An attacker can create many small accounts to bloat RPC load
+- **Rate limiting:** Clients hit RPC rate limits, making the UI unusable
+- **Scalability ceiling:** Markets with 1000+ participants become impractical to load
+
+**Proposed Fix:** 
+- Use `getMultipleAccounts` to batch reads
+- Implement `getProgramAccounts` with filters for bulk fetching
+- Add on-chain summary accounts (total OI, participant count) to reduce reads
+- Consider a caching/indexing layer (e.g., Geyser plugin)
+
+---
+
 ## Medium Findings
 
 ### M1: Missing `require_not_paused` Check in InitLP
@@ -323,6 +363,9 @@ The `unsafe_close` feature skips all `CloseSlab` validation. Compile-time guards
 | H3 | High | I128 Neg Overflow on MIN | Edge case - requires extreme position |
 | H4 | High | Hyperp Mark Price Grinding | Yes - price manipulation via matcher |
 | H5 | High | Admin Can Drain Funds | Yes - requires compromised admin |
+| H6 | High | Hardcoded Program IDs | Yes - breaks on program upgrades |
+| H7 | High | Hardcoded Rent Exemption | Yes - accounts can be reaped |
+| H8 | High | O(N) RPC Calls Per Market | Yes - DoS / scalability ceiling |
 | M1 | Medium | InitLP Missing Pause Check | Yes - LP creation during pause |
 | M2 | Medium | Permissionless Liquidation No Reward | Design concern |
 | M3 | Medium | TopUpInsurance Token Validation | Protected by SPL program |
